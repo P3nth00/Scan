@@ -1,0 +1,165 @@
+import os
+import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def mostrar_lupa():
+    print(r"""
+               ##############                    
+              ##################                  
+            ######          ######                
+            ####              ####                
+          ######                ####              
+          ####                  ####              
+          ####                  ####              
+            ####              ####                
+            ####              ####                
+            ######          ######                
+              ##################                  
+                  ##############                  
+                            ######                
+                              ######              
+                                ####               
+                                ######            
+                                  ######          
+                                    ####           
+    """)
+
+def listar_unidades():
+    unidades = []
+    if os.name == 'nt':  # Windows
+        for drive in range(65, 91):  # De A: a Z:
+            drive_letter = f"{chr(drive)}:\\"
+            if os.path.exists(drive_letter):
+                unidades.append(drive_letter)
+    else:  # Linux e outros sistemas
+        unidades = ["/"] + [f"/media/{user}" for user in os.listdir("/media") if os.path.isdir(os.path.join("/media", user))]
+    return unidades
+
+def processar_arquivo(caminho_completo):
+    try:
+        tamanho = os.path.getsize(caminho_completo)
+        data_criacao = datetime.datetime.fromtimestamp(os.path.getctime(caminho_completo)).isoformat()
+        data_modificado = datetime.datetime.fromtimestamp(os.path.getmtime(caminho_completo)).isoformat()
+        permissoes = oct(os.stat(caminho_completo).st_mode)[-3:]
+
+        return {
+            "caminho": caminho_completo,
+            "tamanho": tamanho,
+            "data_criacao": data_criacao,
+            "data_modificado": data_modificado,
+            "permissoes": permissoes,
+        }
+    except (FileNotFoundError, PermissionError, OSError):
+        return None  # Silenciar erros sem imprimir mensagens
+    except Exception:
+        return None  # Capturar outros erros gerais sem imprimir mensagens
+
+def buscar_arquivos(diretorio, extensoes):
+    encontrados = []
+    total_arquivos = contar_arquivos(diretorio, extensoes)
+    print(f"Total de arquivos a escanear: {total_arquivos}")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_file = {}
+        for root, dirs, files in os.walk(diretorio):
+            try:
+                # Filtrar diretórios desnecessários
+                dirs[:] = [d for d in dirs if os.access(os.path.join(root, d), os.R_OK) and d not in ['System Volume Information', '$RECYCLE.BIN']]
+            except PermissionError:
+                continue
+
+            for file in files:
+                if file.lower().endswith(extensoes):
+                    caminho_completo = os.path.join(root, file)
+                    future = executor.submit(processar_arquivo, caminho_completo)
+                    future_to_file[future] = caminho_completo
+
+        total_processados = 0
+        for future in as_completed(future_to_file):
+            result = future.result()
+            if result:
+                encontrados.append(result)
+                total_processados += 1
+                # Atualizar barra de progresso
+                porcentagem = (total_processados / total_arquivos) * 100
+                barra = '#' * int(porcentagem // 2)
+                print(f"\rProgresso: [{barra:<50}] {porcentagem:.2f}%", end='')
+
+    print()  # Para garantir uma nova linha após o progresso
+    return encontrados
+
+def contar_arquivos(diretorio, extensoes):
+    total_arquivos = 0
+    for root, dirs, files in os.walk(diretorio):
+        for file in files:
+            if file.lower().endswith(extensoes):
+                total_arquivos += 1
+    return total_arquivos
+
+def gerar_relatorio(arquivos_encontrados):
+    try:
+        # Criar diretório "relatorio" na área de trabalho se não existir
+        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+        relatorio_dir = os.path.join(desktop_path, "relatorio")
+        os.makedirs(relatorio_dir, exist_ok=True)
+        caminho_relatorio = os.path.join(relatorio_dir, "relatorio.txt")
+        
+        data_hora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        with open(caminho_relatorio, "w") as f:
+            f.write("Relatório de Escaneamento Forense\n")
+            f.write("=" * 50 + "\n")
+            f.write(f"Data e Hora do Escaneamento: {data_hora}\n")
+            f.write("Este relatório foi gerado como parte de uma análise forense.\n")
+            f.write("Ele contém informações sobre arquivos encontrados que podem ser relevantes para investigações.\n")
+            f.write("=" * 50 + "\n")
+            f.write(f"Total de arquivos encontrados: {len(arquivos_encontrados)}\n")
+            f.write("\nDetalhes dos arquivos:\n")
+            for arquivo in arquivos_encontrados:
+                f.write(f"Caminho: {arquivo['caminho']}\n")
+                f.write(f"Tamanho: {arquivo['tamanho']} bytes\n")
+                f.write(f"Data de Criação: {arquivo['data_criacao']}\n")
+                f.write(f"Data de Modificação: {arquivo['data_modificado']}\n")
+                f.write(f"Permissões: {arquivo['permissoes']} (Formatadas como: [Leitura, Escrita, Execução])\n")
+                f.write("-" * 50 + "\n")
+
+        print(f"Relatório gerado como '{caminho_relatorio}'.")
+    except Exception as e:
+        print(f"Erro ao gerar o relatório: {e}")
+
+def main():
+    mostrar_lupa()
+    
+    unidades = listar_unidades()
+    print("Escolha uma unidade para escanear:")
+    for i, unidade in enumerate(unidades, start=1):
+        print(f"{i}. {unidade}")
+
+    try:
+        escolha = int(input("Digite o número da unidade: ")) - 1
+        if 0 <= escolha < len(unidades):
+            diretorio = unidades[escolha]
+        else:
+            print("Unidade inválida. Encerrando.")
+            return
+
+        extensoes = ('.exe', '.dll', '.docx', '.xlsx', '.jpg', '.png', '.mp4', '.txt')
+
+        arquivos_encontrados = buscar_arquivos(diretorio, extensoes)
+
+        print(f"\nTotal de arquivos encontrados: {len(arquivos_encontrados)}")
+        gerar_relatorio(arquivos_encontrados)
+        
+        # Exibir mensagem de conclusão
+        print("Escaneamento completo, por favor analise o arquivo txt gerado.")
+        print("Por favor, verifique o relatório detalhado gerado.")
+        
+    except ValueError:
+        print("Entrada inválida. Por favor, insira um número.")
+    except Exception as e:
+        print(f"Ocorreu um erro inesperado: {e}")
+    
+    input("Pressione Enter para sair...")  # Pausa para evitar o fechamento do terminal
+
+if __name__ == "__main__":
+    main()
